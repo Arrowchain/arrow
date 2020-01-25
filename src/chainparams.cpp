@@ -220,7 +220,7 @@ public:
           {"aw8MnQYsjxnfevUQKuGYhteZ1WoGWsk3VkA", (174720 * 2), 4}
         };
 
-        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight());
+        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight(0));
     }
 };
 static CMainParams mainParams;
@@ -281,8 +281,9 @@ public:
         consensus.vUpgrades[Consensus::UPGRADE_SAPLING].nActivationHeight =
             Consensus::NetworkUpgrade::ALWAYS_ACTIVE;
         consensus.vUpgrades[Consensus::UPGRADE_BLOSSOM].nProtocolVersion = 170008;
-        consensus.vUpgrades[Consensus::UPGRADE_BLOSSOM].nActivationHeight =
-            Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
+        consensus.vUpgrades[Consensus::UPGRADE_BLOSSOM].nActivationHeight = 584000;
+        consensus.vUpgrades[Consensus::UPGRADE_BLOSSOM].hashActivationBlock =
+            uint256S("00367515ef2e781b8c9358b443b6329572599edd02c59e8af67db9785122f298");
 
         // The best chain should have at least this much work.
         consensus.nMinimumChainWork = uint256S("0x0000000000000000000000000000000000000000000000000000000000000001");
@@ -362,7 +363,7 @@ public:
         vFoundersRewardReplacementAddress = {
           {"t2QpsQKSEzr39jGT2Kqy9kZrSTJs4rp16tg", (3700), 1}
         };
-        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight());
+        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight(0));
     }
 };
 static CTestNetParams testNetParams;
@@ -475,7 +476,7 @@ public:
         vFoundersRewardReplacementAddress = {
           {"aw8MnQYsjxnfevUQKuGYhteZ1WoGWsk3VkA", (10000), 0}
         };
-        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight());
+        assert(vFoundersRewardAddress.size() <= consensus.GetLastFoundersRewardBlockHeight(0));
     }
 
     void UpdateNetworkUpgradeParameters(Consensus::UpgradeIndex idx, int nActivationHeight)
@@ -546,7 +547,7 @@ bool SelectParamsFromCommandLine()
 
 // Block height must be >0 and <=last founders reward block height
 std::string CChainParams::GetFoundersRewardAddressAtHeight(int nHeight) const {
-  int maxHeight = consensus.GetLastFoundersRewardBlockHeight();
+  int maxHeight = consensus.GetLastFoundersRewardBlockHeight(0);
   assert(nHeight > 0 && nHeight <= maxHeight);
   int i = nHeight;
   if (nHeight >= vFoundersRewardAddress.size()) {
@@ -576,7 +577,7 @@ std::string CChainParams::GetFoundersRewardAddressAtHeight(int nHeight) const {
 // Block height must be >0 and <=last founders reward block height
 // The founders reward address is expected to be a multisig (P2SH) address
 CScript CChainParams::GetFoundersRewardScriptAtHeight(int nHeight) const {
-    assert(nHeight > 0 && nHeight <= consensus.GetLastFoundersRewardBlockHeight());
+    assert(nHeight > 0 && nHeight <= consensus.GetLastFoundersRewardBlockHeight(nHeight));
 
     CTxDestination address = DecodeDestination(GetFoundersRewardAddressAtHeight(nHeight).c_str());
     assert(IsValidDestination(address));

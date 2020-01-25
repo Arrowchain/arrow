@@ -87,7 +87,7 @@ TEST(founders_reward_test, create_testnet_2of3multisig) {
 static int GetLastFoundersRewardHeight(const Consensus::Params& params) {
     int blossomActivationHeight = Params().GetConsensus().vUpgrades[Consensus::UPGRADE_BLOSSOM].nActivationHeight;
     bool blossom = blossomActivationHeight != Consensus::NetworkUpgrade::NO_ACTIVATION_HEIGHT;
-    return params.GetLastFoundersRewardBlockHeight();
+    return params.GetLastFoundersRewardBlockHeight(blossom ? blossomActivationHeight : 0);
 }
 
 // Utility method to check the number of unique addresses from height 1 to maxHeight
@@ -128,7 +128,7 @@ TEST(founders_reward_test, general) {
 TEST(founders_reward_test, regtest_get_last_block_blossom) {
     int blossomActivationHeight = Consensus::PRE_BLOSSOM_REGTEST_HALVING_INTERVAL / 2; // = 75
     auto params = RegtestActivateBlossom(false, blossomActivationHeight);
-    int lastFRHeight = params.GetLastFoundersRewardBlockHeight();
+    int lastFRHeight = params.GetLastFoundersRewardBlockHeight(blossomActivationHeight);
     EXPECT_EQ(0, params.Halving(lastFRHeight));
     EXPECT_EQ(1, params.Halving(lastFRHeight + 1));
     RegtestDeactivateBlossom();

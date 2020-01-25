@@ -109,6 +109,15 @@ double GetLocalSolPS()
     return miningTimer.rate(solutionTargetChecks);
 }
 
+std::string WhichNetwork()
+{
+    if (GetBoolArg("-regtest", false))
+        return "regtest";
+    if (GetBoolArg("-testnet", false))
+        return "testnet";
+    return "mainnet";
+}
+
 int EstimateNetHeight(const Consensus::Params& params, int currentHeadersHeight, int64_t currentHeadersTime)
 {
     int64_t now = GetAdjustedTime();
@@ -330,7 +339,7 @@ int printMetrics(size_t cols, bool mining)
                         chainActive.Contains(mapBlockIndex[hash])) {
                     int height = mapBlockIndex[hash]->nHeight;
                     CAmount subsidy = GetBlockSubsidy(height, consensusParams);
-                    if ((height > 0) && (height <= consensusParams.GetLastFoundersRewardBlockHeight())) {
+                    if ((height > 0) && (height <= consensusParams.GetLastFoundersRewardBlockHeight(height))) {
                         subsidy -= subsidy/5;
                     }
                     if (std::max(0, COINBASE_MATURITY - (tipHeight - height)) > 0) {
@@ -460,7 +469,7 @@ void ThreadShowMetricsScreen()
         std::cout << std::endl;
 
         // Thank you text
-        std::cout << _("Thank you for running an Arrow node!") << std::endl;
+        std::cout << strprintf(_("Thank you for running an Arrow node!"), WhichNetwork()) << std::endl;
         std::cout << _("You're helping to strengthen the network and contributing to a social good :)") << std::endl;
 
         // Privacy notice text

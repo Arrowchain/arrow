@@ -59,6 +59,18 @@ struct NetworkUpgrade {
      * should remain disabled on mainnet.
      */
     static constexpr int NO_ACTIVATION_HEIGHT = -1;
+
+    /**
+     * The hash of the block at height nActivationHeight, if known. This is set manually
+     * after a network upgrade activates.
+     *
+     * We use this in IsInitialBlockDownload to detect whether we are potentially being
+     * fed a fake alternate chain. We use NU activation blocks for this purpose instead of
+     * the checkpoint blocks, because network upgrades (should) have significantly more
+     * scrutiny than regular releases. nMinimumChainWork MUST be set to at least the chain
+     * work of this block, otherwise this detection will have false positives.
+     */
+    boost::optional<uint256> hashActivationBlock;
 };
 
 struct RewardStep {
@@ -114,9 +126,7 @@ struct Params {
 
     int Halving(int nHeight) const;
 
-    int GetLastFoundersRewardBlockHeight() const {
-        return nPreBlossomSubsidyHalvingInterval * 2 - 1;
-    }
+    int GetLastFoundersRewardBlockHeight(int nHeight) const;
 
     /** Used to check majorities for block version upgrade */
     int nMajorityEnforceBlockUpgrade;

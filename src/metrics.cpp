@@ -469,7 +469,7 @@ void ThreadShowMetricsScreen()
         std::cout << std::endl;
 
         // Thank you text
-        std::cout << strprintf(_("Thank you for running an Arrow node!"), WhichNetwork()) << std::endl;
+        std::cout << strprintf(_("Thank you for running a %s Arrow node!"), WhichNetwork()) << std::endl;
         std::cout << _("You're helping to strengthen the network and contributing to a social good :)") << std::endl;
 
         // Privacy notice text

@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2019-2020 The Hush developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -42,6 +43,7 @@
 #include <boost/static_assert.hpp>
 
 using namespace std;
+extern bool fZindex;
 
 #if defined(NDEBUG)
 # error "Arrow cannot be compiled without assertions."
@@ -76,6 +78,7 @@ bool fIsBareMultisigStd = true;
 bool fCheckBlockIndex = false;
 bool fCheckpointsEnabled = true;
 bool fCoinbaseEnforcedProtectionEnabled = true;
+bool fZindex = false;
 size_t nCoinCacheUsage = 5000 * 300;
 uint64_t nPruneTarget = 0;
 bool fAlerts = DEFAULT_ALERTS;
@@ -3643,10 +3646,15 @@ bool ReceivedBlockTransactions(
     CBlockIndex *pindexNew,
     const CDiskBlockPos& pos)
 {
-    pindexNew->nTx = block.vtx.size();
-    pindexNew->nChainTx = 0;
-    CAmount sproutValue = 0;
-    CAmount saplingValue = 0;
+    pindexNew->nTx            = block.vtx.size();
+    pindexNew->nChainTx       = 0;
+    CAmount sproutValue       = 0;
+    CAmount saplingValue      = 0;
+    bool isShieldedTx         = false;
+    unsigned int nShieldedSpends=0,nShieldedOutputs=0,nPayments=0, nShieldedOutputsInBlock=0;
+    unsigned int nShieldedTx=0,nFullyShieldedTx=0,nDeshieldingTx=0,nShieldingTx=0;
+    unsigned int nShieldedPayments=0,nFullyShieldedPayments=0,nShieldingPayments=0,nDeshieldingPayments=0;
+    unsigned int nNotarizations=0;
     for (auto tx : block.vtx) {
         // Negative valueBalance "takes" money from the transparent value pool
         // and adds it to the Sapling value pool. Positive valueBalance "gives"
@@ -3658,6 +3666,81 @@ bool ReceivedBlockTransactions(
             sproutValue += js.vpub_old;
             sproutValue -= js.vpub_new;
         }
+
+        // Ignore following stats unless -zindex enabled
+        if (!fZindex)
+            continue;
+
+        nShieldedSpends   = tx.vShieldedSpend.size();
+        nShieldedOutputs  = tx.vShieldedOutput.size();
+        isShieldedTx      = (nShieldedSpends + nShieldedOutputs) > 0 ? true : false;
+
+        // We want to avoid full verification with a low false-positive rate
+        // TODO: A nefarious user could create xtns which meet these criteria and skew stats, what
+        // else can we look for which is not full validation?
+        // Can we filter on properties of tx.vout[0] ?
+        // NOTE: If Arrow ever turns on dpow and wants to track notarizations, uncomment this
+        //if(tx.vin.size()==13 && tx.vout.size()==2 && tx.vout[1].scriptPubKey.IsOpReturn() && tx.vout[1].nValue==0) {
+        //    nNotarizations++;
+        //}
+
+        //NOTE: These are at best heuristics. Improve them as much as possible.
+        //      You cannot compare stats generated from different sets of heuristics, so
+        //      if you change this code, you must reindex or delete datadir + resync from scratch, or you
+        //      will be mixing together data from two set of heuristics.
+        if(isShieldedTx) {
+            nShieldedTx++;
+            // NOTE: It's possible for very complex transactions to be both shielding and deshielding,
+            // such as (t,z)=>(t,z) Since these transactions cannot be made via RPCs currently, they
+            // would currently need to be made via raw transactions
+            if(tx.vin.size()==0 && tx.vout.size()==0) {
+                nFullyShieldedTx++;
+            } else if(tx.vin.size()>0) {
+                nShieldingTx++;
+            } else if(tx.vout.size()>0) {
+                nDeshieldingTx++;
+            }
+
+            if (nShieldedOutputs >= 1) {
+                // If there are shielded outputs, count each as a payment
+                // By default, if there is more than 1 output, we assume 1 zaddr change output which is not a payment.
+                // In the case of multiple outputs which spend inputs exactly, there is no change output and this
+                // heuristic will undercount payments. Since this edge case is rare, this seems acceptable.
+                // t->(t,t,z)   = 1 shielded payment
+                // z->(z,z)     = 1 shielded payment + shielded change
+                // t->(z,z)     = 1 shielded payment + shielded change
+                // t->(t,z)     = 1 shielded payment + transparent change
+                // (z,z)->z     = 1 shielded payment (has this xtn ever occurred?)
+                // z->(z,z,z)   = 2 shielded payments + shielded change
+                // Assume that there is always 1 change output when there are more than one output
+                nShieldedPayments += nShieldedOutputs > 1 ? (nShieldedOutputs-1) : 1;
+                // since we have at least 1 zoutput, all transparent outputs are payments, not change
+                nShieldedPayments += tx.vout.size();
+
+                // Fully shielded do not count toward shielding/deshielding
+                if(tx.vin.size()==0 && tx.vout.size()==0) {
+                    nFullyShieldedPayments += nShieldedOutputs > 1 ? (nShieldedOutputs-1) : 1;
+                } else {
+                    nShieldingPayments += nShieldedOutputs > 1 ? (nShieldedOutputs-1) : 1;
+                    // Also count remaining taddr outputs as payments
+                    nShieldedPayments    += tx.vout.size();
+                }
+            } else if (nShieldedSpends >=1) {
+                // Shielded inputs with no shielded outputs. We know none are change output because
+                // change would flow back to the zaddr
+                // z->t         = 1 shielded payment
+                // z->(t,t)     = 2 shielded payments
+                // z->(t,t,t)   = 3 shielded payments
+                nShieldedPayments    += tx.vout.size();
+                nDeshieldingPayments += tx.vout.size() > 1 ? tx.vout.size()-1 : tx.vout.size();
+            }
+            nPayments += nShieldedPayments;
+        } else {
+            // No shielded payments, add transparent payments minus a change address
+            nPayments +=  tx.vout.size() > 1 ? tx.vout.size()-1 : tx.vout.size();
+        }
+        // To calculate the anonset we must track the sum of zouts in every tx, in every block. -- Duke
+        nShieldedOutputsInBlock += nShieldedOutputs;
     }
     pindexNew->nSproutValue = sproutValue;
     pindexNew->nChainSproutValue = boost::none;
@@ -3719,6 +3802,10 @@ bool ReceivedBlockTransactions(
             mapBlocksUnlinked.insert(std::make_pair(pindexNew->pprev, pindexNew));
         }
     }
+
+    if (fZindex)
+        fprintf(stderr, "ht.%d, ShieldedPayments=%d, ShieldedTx=%d, ShieldedOutputs=%d, FullyShieldedTx=%d, ntz=%d\n",
+        pindexNew->nHeight, nShieldedPayments, nShieldedTx, nShieldedOutputs, nFullyShieldedTx, nNotarizations );
 
     return true;
 }
@@ -4493,6 +4580,10 @@ bool static LoadBlockIndexDB()
     pblocktree->ReadFlag("txindex", fTxIndex);
     LogPrintf("%s: transaction index %s\n", __func__, fTxIndex ? "enabled" : "disabled");
 
+    // Check whether we have a shielded index
+    pblocktree->ReadFlag("zindex", fZindex);
+    LogPrintf("%s: shielded index %s\n", __func__, fZindex ? "enabled" : "disabled");
+
     // insightexplorer
     // Check whether block explorer features are enabled
     pblocktree->ReadFlag("insightexplorer", fInsightExplorer);
@@ -4838,6 +4929,10 @@ bool InitBlockIndex(const CChainParams& chainparams)
     // Use the provided setting for -txindex in the new database
     fTxIndex = GetBoolArg("-txindex", false);
     pblocktree->WriteFlag("txindex", fTxIndex);
+
+    // Use the provided setting for -zindex in the new database
+    fZindex = GetBoolArg("-zindex", DEFAULT_SHIELDEDINDEX);
+    pblocktree->WriteFlag("zindex", fZindex);
 
     // Use the provided setting for -insightexplorer in the new database
     fInsightExplorer = GetBoolArg("-insightexplorer", false);

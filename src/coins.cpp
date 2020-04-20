@@ -1,4 +1,5 @@
 // Copyright (c) 2012-2014 The Bitcoin Core developers
+// Copyright (c) 2019-2020 The Hush developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -32,6 +33,11 @@ void CCoins::CalcMaskSize(unsigned int &nBytes, unsigned int &nNonzeroBytes) con
         }
     }
     nBytes += nLastUsedByte;
+}
+
+CNullifiersMap CCoinsViewCache::getNullifiers()
+{
+    return cacheSaplingNullifiers;
 }
 
 bool CCoins::Spend(uint32_t nPos)

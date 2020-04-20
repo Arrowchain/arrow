@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2019-2020 The Hush developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -1072,6 +1073,18 @@ void CWallet::AddToSpends(const uint256& wtxid)
     for (const SpendDescription &spend : thisTx.vShieldedSpend) {
         AddToSaplingSpends(spend.nullifier, wtxid);
     }
+}
+
+int64_t CWallet::NullifierCount()
+{
+    LOCK(cs_wallet);
+    // this is our *local* nullifier count
+    //fprintf(stderr,"%s:mapTxSaplingNullifers.size=%d\n",__FUNCTION__,(int)mapTxSaplingNullifiers.size() );
+    // nullifiers which are unconfirmed
+    //fprintf(stderr,"%s:mempool.getNullifiers.size=%d\n",__FUNCTION__,(int)mempool.getNullifiers().size() );
+    // this is the global nullifier count cache
+    //fprintf(stderr,"%s:cacheSaplingNullifiers.size=%d\n",__FUNCTION__,(int)pcoinsTip->getNullifiers().size() );
+    return pcoinsTip->getNullifiers().size();
 }
 
 void CWallet::ClearNoteWitnessCache()

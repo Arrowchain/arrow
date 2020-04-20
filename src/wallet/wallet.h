@@ -792,6 +792,7 @@ public:
     int64_t nWitnessCacheSize;
     bool fSaplingMigrationEnabled = false;
     bool fSaplingConsolidationEnabled = false;
+    int64_t NullifierCount();
 
     void ClearNoteWitnessCache();
 

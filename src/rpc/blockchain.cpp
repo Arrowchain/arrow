@@ -1,5 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2019-2020 The Hush developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -15,6 +16,7 @@
 #include "streams.h"
 #include "sync.h"
 #include "util.h"
+#include "wallet/wallet.h"
 
 #include <stdint.h>
 
@@ -23,6 +25,8 @@
 #include <regex>
 
 using namespace std;
+extern CWallet* pwalletMain;
+extern bool fZindex;
 
 extern void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry);
 void ScriptPubKeyToJSON(const CScript& scriptPubKey, UniValue& out, bool fIncludeHex);
@@ -1289,6 +1293,246 @@ UniValue reconsiderblock(const UniValue& params, bool fHelp)
     return NullUniValue;
 }
 
+inline CBlockIndex* LookupBlockIndex(const uint256& hash)
+{
+    AssertLockHeld(cs_main);
+    BlockMap::const_iterator it = mapBlockIndex.find(hash);
+    return it == mapBlockIndex.end() ? nullptr : it->second;
+}
+
+// Every coin can have different number of coinbase due to Founders Reward addresses/etc
+// If this value changes, a reindex on nodes is not necessary.
+#define COINBASE_PER_BLOCK 2 // ARW has 2 coinbase per block, update this if that ever changes
+// given a transaction count X, subtract out coinbase and dpow transactions
+// to give an "organic count". We return 0 instead of negative values
+#define ORG(X)  ( (X - COINBASE_PER_BLOCK*blockcount - nNotarizationsDiff) > 0 ? (X - COINBASE_PER_BLOCK*blockcount - nNotarizationsDiff) : 0 )
+
+//TODO: Allow custom error message in this macro
+//NOTE: Arrow does not have this
+//#define THROW_IF_SYNCING(INSYNC)  if (INSYNC == 0) { throw runtime_error(strprintf("%s: Chain still syncing at height %d, aborting to prevent garbage data. Please wait until the chain is synced to run this RPC",__FUNCTION__,chainActive.Tip()->GetHeight())); }
+
+UniValue getchaintxstats(const UniValue& params, bool fHelp)
+{
+    //TODO: ZEC does not have this.
+    //THROW_IF_SYNCING(KOMODO_INSYNC);
+
+    if (fHelp || params.size() > 2)
+        throw runtime_error(
+                "getchaintxstats\n"
+                "\nCompute statistics about the total number and rate of transactions in the chain.\n"
+                "\nThis RPC will return a large amount of additional data if the shielded index (zindex) is enabled.\n"
+                "\nArguments:\n"
+                "1. nblocks   (numeric, optional) Number of blocks in averaging window.\n"
+                "2. blockhash (string, optional) The hash of the block which ends the window.\n"
+                "\nResult:\n"
+            "{\n"
+            "  \"time\": xxxxx,                           (numeric) The timestamp for the final block in the window in UNIX format.\n"
+            "  \"txcount\": xxxxx,                        (numeric) The total number of transactions in the chain up to that point.\n"
+            "  \"nullifiers\": xxxxx,                     (numeric) The total number of shielded nullifiers in the chain up to that point.\n"
+            "  \"shielded_txcount\": xxxxx,               (numeric) The total number of shielded (containing a zaddr) transactions in the chain up to that point.\n"
+            "  \"shielded_outputs\": xxxxx,               (numeric) The total number of shielded outputs in the chain up to that point.\n"
+            "  \"shielded_pool_size\": xxxxx,             (numeric) The total number of unspent shielded outputs, i.e. the Shielded Pool or Anonymity Set (anonset).\n"
+            "  \"shielding_txcount\": xxxxx,              (numeric) The total number of shielding (containing a zaddr output) transactions in the chain up to that point.\n"
+            "  \"deshielding_txcount\": xxxxx,            (numeric) The total number of deshielding (containing a zaddr input) transactions in the chain up to that point.\n"
+            "  \"fully_shielded_txcount\": xxxxx,         (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) transactions in the chain up to that point.\n"
+            "  \"payments\": xxxxx,                       (numeric) The total number of payments in the chain up to that point.\n"
+            "  \"shielded_payments\": xxxxx,              (numeric) The total number of shielded (containing a zaddr) payments in the chain up to that point.\n"
+            "  \"shielding_payments\": xxxxx,             (numeric) The total number of shielding (containing a zaddr output) payments in the chain up to that point.\n"
+            "  \"deshielding_payments\": xxxxx,           (numeric) The total number of deshielding (containing a zaddr input) payments in the chain up to that point.\n"
+            "  \"fully_shielded_payments\": xxxxx,        (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) payments in the chain up to that point.\n"
+            "  \"notarizations\": xxxxx,                  (numeric) The total number of notarization transactions in the chain up to that point.\n"
+            "  \"window_final_block_hash\": \"...\",      (string) The hash of the final block in the window.\n"
+            "  \"window_final_block_height\": xxxxx,      (numeric) Block height of final block in window.\n"
+            "  \"window_block_count\": xxxxx,             (numeric) Size of the window in number of blocks.\n"
+            "  \"window_tx_count\": xxxxx,                (numeric) The number of transactions in the window. Only returned if \"window_block_count\" is > 0.\n"
+            "  \"window_interval\": xxxxx,                (numeric) The elapsed time in the window in seconds. Only returned if \"window_block_count\" is > 0.\n"
+            "  \"window_shielded_txcount\": xxxxx,        (numeric) The total number of shielded (containing a zaddr) transactions in the chain up to that point.\n"
+            "  \"window_shielding_txcount\": xxxxx,       (numeric) The total number of shielding (containing a zaddr output) transactions in the chain up to that point.\n"
+            "  \"window_deshielding_txcount\": xxxxx,     (numeric) The total number of deshielding (containing a zaddr input) transactions in the chain up to that point.\n"
+            "  \"window_fully_shielded_txcount\": xxxxx,  (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) transactions in the chain up to that point.\n"
+            "  \"window_shielded_payments\": xxxxx,       (numeric) The total number of shielded (containing a zaddr) payments in the chain up to that point.\n"
+            "  \"window_shielding_payments\": xxxxx,      (numeric) The total number of shielding (containing a zaddr output) payments in the chain up to that point.\n"
+            "  \"window_deshielding_payments\": xxxxx,    (numeric) The total number of deshielding (containing a zaddr input) payments in the chain up to that point.\n"
+            "  \"window_fully_shielded_payments\": xxxxx, (numeric) The total number of z2z, AKA fully-shielded (containing only zaddr inputs+outputs) payments in the chain up to that point.\n"
+            "  \"txrate\": x.xx,                          (numeric) The average rate of transactions per second in the window. Only returned if \"window_interval\" is > 0.\n"
+            "  \"shielded\": {                            (string)  The set of stats specific to only shieled transactions. \n"
+            "      \"fully_shielded_tx_percent\":         (numeric) The percentage of fully shielded transactions.\n"
+            "      \"shielding_tx_percent\":              (numeric) The percentage of shielding transactions.\n"
+            "      \"deshielding_tx_percent\":            (numeric) The percentage of deshielding transactions.\n"
+            "      \"fully_shielded_payments_percent\":   (numeric) The percentage of fully shielded payments.\n"
+            "      \"shielding_payments_percent\":        (numeric) The percentage of shielding payments.\n"
+            "      \"deshielding_payments_percent\":      (numeric) The percentage of deshielding payments.\n"
+            "  },\n"
+            "  \"organic\": {                             (string)  The set of stats about organic transactions, i.e. those that are not coinbase and not notarizations\n"
+            "      \"fully_shielded_tx_percent\":         (numeric) The percentage of fully shielded organic transactions.\n"
+            "      \"shielding_tx_percent\":              (numeric) The percentage of shielding organic transactions.\n"
+            "      \"deshielding_tx_percent\":            (numeric) The percentage of deshielding organic transactions.\n"
+            "      \"fully_shielded_payments_percent\":   (numeric) The percentage of fully shielded organic payments.\n"
+            "      \"shielding_payments_percent\":        (numeric) The percentage of shielding organic payments.\n"
+            "      \"deshielding_payments_percent\":      (numeric) The percentage of deshielding organic payments.\n"
+            "  }\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getchaintxstats", "")
+            + HelpExampleRpc("getchaintxstats", "420")
+        );
+
+    const CBlockIndex* pindex;
+    int blockcount = 57600; // 30 * 24 * 60 * 60 / Params().GetConsensus().nPowTargetSpacing; // By default: 1 month
+
+    if (params[1].isNull()) {
+        LOCK(cs_main);
+        pindex = chainActive.Tip();
+    } else {
+        uint256 hash(ParseHashV(params[1], "blockhash"));
+        LOCK(cs_main);
+        pindex = LookupBlockIndex(hash);
+        if (!pindex) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+        }
+        if (!chainActive.Contains(pindex)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Block is not in main chain");
+        }
+    }
+
+    assert(pindex != nullptr);
+
+    if (params[0].isNull()) {
+        blockcount = std::max(0, std::min(blockcount, pindex->nHeight - 1));
+    } else {
+        blockcount = params[0].get_int();
+
+        if (blockcount < 0 || (blockcount > 0 && blockcount >= pindex->nHeight)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid block count: should be between 0 and the block's height - 1");
+        }
+    }
+
+    const CBlockIndex* pindexPast = pindex->GetAncestor(pindex->nHeight - blockcount);
+    int nTimeDiff                 = pindex->GetMedianTimePast() - pindexPast->GetMedianTimePast();
+    int nTxDiff                   = pindex->nChainTx - pindexPast->nChainTx;
+
+    UniValue ret(UniValue::VOBJ);
+    ret.pushKV("time", (int64_t)pindex->nTime);
+    ret.pushKV("txcount", (int64_t)pindex->nChainTx);
+    ret.pushKV("window_final_block_hash", pindex->GetBlockHash().GetHex());
+    ret.pushKV("window_final_block_height", pindex->nHeight);
+    ret.pushKV("window_block_count", blockcount);
+
+    if (fZindex) {
+        ret.pushKV("notarizations", (int64_t)pindex->nChainNotarizations);
+        ret.pushKV("shielded_txcount", (int64_t)pindex->nChainShieldedTx);
+        ret.pushKV("fully_shielded_txcount", (int64_t)pindex->nChainFullyShieldedTx);
+        ret.pushKV("deshielding_txcount", (int64_t)pindex->nChainDeshieldingTx);
+        ret.pushKV("shielding_txcount", (int64_t)pindex->nChainShieldingTx);
+        ret.pushKV("shielded_payments", (int64_t)pindex->nChainShieldedPayments);
+        ret.pushKV("fully_shielded_payments", (int64_t)pindex->nChainFullyShieldedPayments);
+        ret.pushKV("deshielding_payments", (int64_t)pindex->nChainDeshieldingPayments);
+        ret.pushKV("shielding_payments", (int64_t)pindex->nChainShieldingPayments);
+
+        int64_t nullifierCount = pwalletMain->NullifierCount();
+        ret.pushKV("nullifiers", (int64_t)nullifierCount);
+        ret.pushKV("shielded_pool_size", (int64_t)pindex->nChainShieldedOutputs - nullifierCount);
+        ret.pushKV("shielded_outputs", (int64_t)pindex->nChainShieldedOutputs);
+    }
+
+    if (blockcount > 0) {
+        ret.pushKV("window_tx_count", nTxDiff);
+        ret.pushKV("window_interval", nTimeDiff);
+        int64_t nPaymentsDiff              = pindex->nChainPayments - pindexPast->nChainPayments;
+        int64_t nShieldedTxDiff            = pindex->nChainShieldedTx - pindexPast->nChainShieldedTx;
+        int64_t nShieldingTxDiff           = pindex->nChainShieldingTx - pindexPast->nChainShieldingTx;
+        int64_t nDeshieldingTxDiff         = pindex->nChainDeshieldingTx - pindexPast->nChainDeshieldingTx;
+        int64_t nFullyShieldedTxDiff       = pindex->nChainFullyShieldedTx - pindexPast->nChainFullyShieldedTx;
+        int64_t nShieldedPaymentsDiff      = pindex->nChainShieldedPayments - pindexPast->nChainShieldedPayments;
+        int64_t nShieldingPaymentsDiff     = pindex->nChainShieldingPayments - pindexPast->nChainShieldingPayments;
+        int64_t nDeshieldingPaymentsDiff   = pindex->nChainDeshieldingPayments - pindexPast->nChainDeshieldingPayments;
+        int64_t nFullyShieldedPaymentsDiff = pindex->nChainFullyShieldedPayments - pindexPast->nChainFullyShieldedPayments;
+        int64_t nNotarizationsDiff         = pindex->nChainNotarizations - pindexPast->nChainNotarizations;
+
+        if (nTimeDiff > 0) {
+            ret.pushKV("txrate",                     ((double)nTxDiff)                    / nTimeDiff);
+            if (fZindex) {
+                ret.pushKV("notarization_txrate",        ((double)nNotarizationsDiff)         / nTimeDiff);
+                ret.pushKV("shielded_txrate",            ((double)nShieldedTxDiff)            / nTimeDiff);
+                ret.pushKV("fully_shielded_txrate",      ((double)nFullyShieldedTxDiff)       / nTimeDiff);
+                ret.pushKV("paymentrate",                ((double)nPaymentsDiff)              / nTimeDiff);
+                ret.pushKV("shielded_paymentrate",       ((double)nShieldedPaymentsDiff)      / nTimeDiff);
+                ret.pushKV("fully_shielded_paymentrate", ((double)nFullyShieldedPaymentsDiff) / nTimeDiff);
+            }
+        }
+
+        if (fZindex) {
+            ret.pushKV("window_payments", (int) nPaymentsDiff);
+            ret.pushKV("window_notarizations", (int) nNotarizationsDiff);
+            ret.pushKV("window_fully_shielded_txcount", nFullyShieldedTxDiff);
+            ret.pushKV("window_deshielding_txcount", nDeshieldingTxDiff);
+            ret.pushKV("window_shielding_txcount", nShieldingTxDiff);
+            ret.pushKV("window_shielded_txcount", nShieldedTxDiff);
+            ret.pushKV("window_fully_shielded_payments", nFullyShieldedPaymentsDiff);
+            ret.pushKV("window_shielded_payments", nShieldedPaymentsDiff);
+            ret.pushKV("window_shielding_payments", nShieldingPaymentsDiff);
+            ret.pushKV("window_deshielding_payments", nDeshieldingPaymentsDiff);
+            if (nTxDiff > 0) {
+                ret.pushKV("shielded_tx_percent",        ((double)nShieldedTxDiff)      / nTxDiff);
+                ret.pushKV("fully_shielded_tx_percent",  ((double)nFullyShieldedTxDiff) / nTxDiff);
+                ret.pushKV("shielding_tx_percent",       ((double)nShieldingTxDiff)     / nTxDiff);
+                ret.pushKV("deshielding_tx_percent",     ((double)nDeshieldingTxDiff)   / nTxDiff);
+            }
+            if (nPaymentsDiff > 0) {
+                ret.pushKV("shielded_payments_percent",       ((double)nShieldedPaymentsDiff)      / nPaymentsDiff);
+                ret.pushKV("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / nPaymentsDiff);
+                ret.pushKV("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / nPaymentsDiff);
+                ret.pushKV("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / nPaymentsDiff);
+            }
+
+            // Statistics considering only zxtns
+            UniValue shielded(UniValue::VOBJ);
+            if (nShieldedTxDiff > 0) {
+                shielded.pushKV("fully_shielded_tx_percent", ((double)nFullyShieldedTxDiff) / nShieldedTxDiff );
+                shielded.pushKV("shielding_tx_percent",      ((double)nShieldingTxDiff)     / nShieldedTxDiff );
+                shielded.pushKV("deshielding_tx_percent",    ((double)nDeshieldingTxDiff)   / nShieldedTxDiff );
+            }
+            if (nShieldedPaymentsDiff > 0) {
+                shielded.pushKV("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / nShieldedPaymentsDiff );
+                shielded.pushKV("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / nShieldedPaymentsDiff );
+                shielded.pushKV("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / nShieldedPaymentsDiff );
+            }
+
+            if(nShieldedTxDiff+nShieldedPaymentsDiff > 0)
+                ret.pushKV("shielded", shielded);
+
+            // Organic tx stats = Raw - Coinbase - DPoW
+            if (nTxDiff > 0) {
+                UniValue organic(UniValue::VOBJ);
+
+                if(ORG(nTxDiff) > 0) {
+                    organic.pushKV("shielded_tx_percent",             ((double)nShieldedTxDiff)            / ORG(nTxDiff));
+                    organic.pushKV("fully_shielded_tx_percent",       ((double)nFullyShieldedTxDiff)       / ORG(nTxDiff));
+                    organic.pushKV("shielding_tx_percent",            ((double)nShieldingTxDiff)           / ORG(nTxDiff));
+                    organic.pushKV("deshielding_tx_percent",          ((double)nDeshieldingTxDiff)         / ORG(nTxDiff));
+                }
+                if(ORG(nPaymentsDiff) > 0) {
+                    organic.pushKV("shielded_payments_percent",       ((double)nShieldedPaymentsDiff)      / ORG(nPaymentsDiff));
+                    organic.pushKV("fully_shielded_payments_percent", ((double)nFullyShieldedPaymentsDiff) / ORG(nPaymentsDiff));
+                    organic.pushKV("shielding_payments_percent",      ((double)nShieldingPaymentsDiff)     / ORG(nPaymentsDiff));
+                    organic.pushKV("deshielding_payments_percent",    ((double)nDeshieldingPaymentsDiff)   / ORG(nPaymentsDiff));
+                }
+                if (nTimeDiff > 0) {
+                    organic.pushKV("paymentrate",                     ((double)ORG(nPaymentsDiff))         / nTimeDiff);
+                    organic.pushKV("txrate",                          ((double)ORG(nTxDiff))               / nTimeDiff);
+                }
+                organic.pushKV("txcount", (int) ORG(nTxDiff));
+                organic.pushKV("payments", (int) ORG(nPaymentsDiff));
+                ret.pushKV("organic", organic);
+            }
+
+         }
+    }
+
+    return ret;
+}
+
+
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         okSafeMode
   //  --------------------- ------------------------  -----------------------  ----------
@@ -1304,6 +1548,7 @@ static const CRPCCommand commands[] =
     { "blockchain",         "getrawmempool",          &getrawmempool,          true  },
     { "blockchain",         "gettxout",               &gettxout,               true  },
     { "blockchain",         "gettxoutsetinfo",        &gettxoutsetinfo,        true  },
+    { "blockchain",         "getchaintxstats",        &getchaintxstats,        true  },
     { "blockchain",         "verifychain",            &verifychain,            true  },
 
     // insightexplorer

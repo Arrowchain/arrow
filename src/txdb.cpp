@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2014 The Bitcoin Core developers
+// Copyright (c) 2019-2020 The Hush developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php .
 
@@ -489,6 +490,19 @@ bool CBlockTreeDB::LoadBlockIndexGuts(boost::function<CBlockIndex*(const uint256
                 pindexNew->nTx            = diskindex.nTx;
                 pindexNew->nSproutValue   = diskindex.nSproutValue;
                 pindexNew->nSaplingValue  = diskindex.nSaplingValue;
+
+                // These items are all part of the shielded index (zindex)
+                pindexNew->nPayments              = diskindex.nPayments;
+                pindexNew->nShieldedTx            = diskindex.nShieldedTx;
+                pindexNew->nShieldedOutputs       = diskindex.nShieldedOutputs;
+                pindexNew->nShieldedPayments      = diskindex.nShieldedPayments;
+                pindexNew->nShieldingTx           = diskindex.nShieldingTx;
+                pindexNew->nShieldingPayments     = diskindex.nShieldingPayments;
+                pindexNew->nDeshieldingTx         = diskindex.nDeshieldingTx;
+                pindexNew->nDeshieldingPayments   = diskindex.nDeshieldingPayments;
+                pindexNew->nFullyShieldedTx       = diskindex.nFullyShieldedTx;
+                pindexNew->nFullyShieldedPayments = diskindex.nFullyShieldedPayments;
+                pindexNew->nNotarizations         = diskindex.nNotarizations;
 
                 // Consistency checks
                 auto header = pindexNew->GetBlockHeader();
